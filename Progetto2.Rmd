@@ -1,0 +1,483 @@
+---
+title: "Progetto 2"
+author: "Emanuele Iaccarino"
+date: "2025-05-15"
+output: html_document
+---
+
+```{r}
+# install.packages(c("tsibble", "lubridate"))
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tsibble)     # Per gestire le serie temporali
+library(lubridate)   # Per gestire le date
+
+# Carica il file
+dati <- read_csv("Dati_Belgio.csv")
+#View(dati)
+```
+
+```{r}
+# Controlla nomi delle variabili
+names(dati)
+```
+```{r}
+# Controlla NA
+summary(dati)
+```
+## Pulizia del Dataset
+
+```{r}
+library(dplyr)
+# variabili inutili
+dati <- dati %>%
+  select(-`...1`, -country, -quat, -id)
+```
+
+
+```{r}
+library(zoo)
+# 4. Crea variabile tempo (assumiamo q172 = Q1 2003)
+start_period <- as.yearqtr("2003 Q1")
+dati$t <- seq(start_period, by = 0.25, length.out = nrow(dati))
+dati$t
+```
+
+```{r}
+# check usando anno e semestre
+dati <- dati %>%
+  mutate(
+    anno = as.integer(floor(as.numeric(format(t, "%Y")))),
+    quarter = as.integer(cycle(t))
+  )
+
+head(dati %>% select(t, anno, quarter))
+```
+Si trova quindi possiamo continuare con l'analisi
+
+## Scelta della y (var dipendente)
+
+- tassi_crescita_bp:
+crescita dei prestiti a breve termine alle imprese
+
+```{r}
+summary(dati$tassi_crescita_bp)
+ggplot(dati, aes(x = t, y = tassi_crescita_bp)) +
+  geom_line() +
+  labs(title = "crescita dei prestiti a breve termine alle imprese",
+       y = "tassi_crescita_bp", x = "Trimestre")
+```
+
+- Spread_bp:
+Spread tra tassi di prestito BP e tasso Euribor
+```{r}
+summary(dati$Spread_bp)
+ggplot(dati, aes(x = t, y = Spread_bp)) +
+  geom_line() +
+  labs(title = "Spread tra tassi di prestito BP e tasso Euribor",
+       y = "Spread_bp", x = "Trimestre")
+```
+
+- tassi_interesse_bp_tot:
+Tasso d’interesse medio sui prestiti a breve termine
+
+```{r}
+summary(dati$tassi_interesse_bp_tot)
+ggplot(dati, aes(x = t, y = tassi_interesse_bp_tot)) +
+  geom_line() +
+  labs(title = "Tasso d’interesse medio sui prestiti a breve termine",
+       y = "tassi_interesse_bp_tot", x = "Trimestre")
+```
+
+- ratio_prestiti_depositi:
+Rapporto prestiti/depositi
+
+```{r}
+summary(dati$tassi_interesse_bp_tot)
+ggplot(dati, aes(x = t, y = ratio_prestiti_depositi)) +
+  geom_line() +
+  labs(title = "Rapporto prestiti/depositi",
+       y = "ratio_prestiti_depositi", x = "Trimestre")
+```
+
+Sono tutte ottime candidate, ma data la maggior completezza nei dati riguardo la variabile tassi_crescita_bp (minor numero di Nans), che con solo 68 righe risultano particolarmente significative
+
+```{r}
+# facciamo quindi un plot piu carino
+ggplot(dati, aes(x = t, y = tassi_crescita_bp)) +
+  geom_line() +
+  geom_smooth(method = "loess", se = FALSE, color = "red") +
+  labs(title = "Crescita dei prestiti a breve termine (tassi_crescita_bp)",
+       x = "Trimestre", y = "Tasso di crescita") +
+  theme_minimal()
+# geom_smooth mostra il trend
+```
+```{r}
+trimestre = dati$t # lo salviamo per sicurezza
+# ma lo rimuoviamo perchè è utile solo al plotting
+dati <- dati %>%
+  select(-t)
+```
+
+## Scelta delle features
+
+```{r}
+# ricontrolliamo variabili
+names(dati)
+```
+Source per corplot:
+https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+
+- Spread_bp importante
+includiamo questo ed escludiamo o Spread_bp_fino1, Spread_bp_oltre1 per evitare problemi di multicollinearità
+
+costo_credito può essere considerato un'alternativa allo spread
+
+tassi_interesse_bp_tot anche questa insieme allo spread può causare problemi
+
+```{r}
+vars <- c("Spread_bp", "Spread_bp_fino1", "Spread_bp_oltre1", "costo_credito", "tassi_interesse_bp_tot")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+```{r}
+# rimuovere tassi_interesse_bp_tot è infatti importante per non confondere il modello
+dati <- dati %>%
+  select(-tassi_interesse_bp_tot)
+```
+
+```{r}
+table(dati$Spread_bp_fino1, useNA = "always")
+table(dati$Spread_bp_oltre1, useNA = "always")
+# tra i due rimuoviamo Spread_bp_oltre1 perchè presenta piu' dati mancanti
+```
+
+```{r}
+vars <- c("Spread_bp", "Spread_bp_fino1", "costo_credito")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+la variabile rimossa ha avuto un effetto indesiderato sulla variabile rimasta, rendendola altamente correlata. Dato che già in precedenza pensavo di rimuoverle entrambe sembra essere la soluzione piu' logica
+
+```{r}
+dati <- dati %>%
+  select(-Spread_bp_fino1, -Spread_bp_oltre1 )
+```
+
+
+- tassi_euribor sicuramente importanti
+
+t_operazioni_rifin_marg e t_interesse_operazioni_rif_prin sono indicatori Banca Centrale, ma spesso correlati con l’Euribor, ergo ridondanti
+
+t_depositi_overnight poco rilevante
+
+```{r}
+vars <- c("tassi_euribor", "t_operazioni_rifin_marg", "t_interesse_operazioni_rif_prin", "t_depositi_overnight")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+
+Tutte altamente correlate come spiegato prima teoricamente, rimuoviamole e lasciamo solo tassi_euribor 
+```{r}
+dati <- dati %>%
+  select(-t_operazioni_rifin_marg, -t_interesse_operazioni_rif_prin, -t_depositi_overnight)
+
+```
+
+- ratio_prestiti_depositi importante
+
+consistenze_depositi prob correlato alla precedente
+
+titoli_debiti non direttamente connesso alla crescita prestiti
+
+```{r}
+vars <- c("ratio_prestiti_depositi", "consistenze_depositi", "titoli_debiti")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+Perchè sono vuoti? 
+Sono valori vicini allo 0 quindi guardando la legenda il font è bianco, bianco su bianco ovviamente non si vede
+```{r}
+# check da qua
+cor_matrix
+```
+Conferma quanto detto in precedenza, si può valutare la rimozione successivamente
+
+consistenze_depositi si può tenere
+
+- GDP molto importante.
+
+Tassi_crescita_depositi può confondere
+
+```{r}
+vars <- c("GDP", "Tassi_crescita_depositi")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+Si possono tenere
+
+```{r}
+# variabili rimaste
+names(dati)
+```
+Mancano ancora alcune da pulire
+```{r}
+vars <- c("spread_lp", "spread_lp_fino1", "spread_lp_oltre1")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+```
+```{r}
+dati <- dati %>%
+  select(-spread_lp_fino1, -spread_lp_oltre1)
+# nel dubbio leviamo
+```
+
+```{r}
+vars <- c("spread_lp", "Spread_bp")
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.cex = 0.7)
+# qui invece meglio rimanere, male che vada sarà il modello a identificare un ipotetico problema
+```
+```{r}
+names(dati)
+```
+
+
+Finora abbaimo diviso le variabili in macrotematiche, adesso guardiamole nell'insieme per valutare anche come l'interazione tra diverse variabili possa influenzare il nostro modello 
+```{r}
+vars = names(dati)
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.srt = 45,number.cex = 0.5,tl.cex = 0.8, 
+)
+```
+```{r}
+cor_df <- as.data.frame(as.table(cor_matrix)) %>%
+  filter(Var1 != Var2) %>%
+  filter(abs(Freq) >= 0.85) %>%
+  arrange(desc(abs(Freq)))
+
+# Rimuovi duplicati simmetrici (A,B) e (B,A)
+cor_df_unique <- cor_df %>%
+  rowwise() %>%
+  mutate(pair = paste(sort(c(Var1, Var2)), collapse = "_")) %>%
+  distinct(pair, .keep_all = TRUE) %>%
+  select(Var1, Var2, Corr = Freq)
+
+print(cor_df_unique)
+```
+
+
+vediamo nello specifico la correlazione con la var target per prendere decisioni informate su quali variabili rimuovere, insieme ovviamente alle basi teoriche
+```{r}
+cor_target <- sort(cor_matrix["tassi_crescita_bp", ], decreasing = TRUE)
+print(round(cor_target, 3))
+```
+Alcune variabili faccio fatica a rimuovere data l'altra correlazione, vediamo però che presenta molti dati mancanti, questo potrebbe creare probleimi
+
+```{r}
+na_percentuali <- sapply(dati, function(x) mean(is.na(x)))
+print(round(na_percentuali, 2))
+```
+
+```{r}
+# Seleziona solo le colonne con meno del 50% di NA
+dati_filtrato <- dati[, na_percentuali < 0.5]
+# ergo rimuoviamo tassi_interesse_lp_oltre1, tassi_interesse_bp_oltre1    
+```
+
+```{r}
+names(dati_filtrato)
+```
+```{r}
+vars = names(dati_filtrato)
+dati_corr <- dati_filtrato %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+
+cor_df <- as.data.frame(as.table(cor_matrix)) %>%
+  filter(Var1 != Var2) %>%
+  filter(abs(Freq) >= 0.85) %>%
+  arrange(desc(abs(Freq)))
+
+# Rimuovi duplicati simmetrici (A,B) e (B,A)
+cor_df_unique <- cor_df %>%
+  rowwise() %>%
+  mutate(pair = paste(sort(c(Var1, Var2)), collapse = "_")) %>%
+  distinct(pair, .keep_all = TRUE) %>%
+  select(Var1, Var2, Corr = Freq)
+
+print(cor_df_unique)
+```
+
+```{r}
+dati_filtrato <- dati_filtrato %>%
+  select(-tassi_interesse_bp_fino1)
+```
+
+```{r}
+vars = names(dati_filtrato)
+dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+cor_matrix <- cor(dati_corr)
+corrplot(cor_matrix, method = "number", tl.srt = 45,number.cex = 0.5,tl.cex = 0.8, 
+)
+
+```
+
+```{r}
+mod <- lm(tassi_crescita_bp ~ . ,data = dati_filtrato)
+summary(mod)
+```
+modello ben fitatto in termini di \R^2 = 0.80 e p-value globale < 0.001, ma... ci sono alcune criticità importanti da discutere:
+
+Solo due variabili sono statisticamente significative al 5%:
+
+- tassi_crescita_lp
+
+- Tassi_crescita_depositi
+
+Molte altre hanno p-value > 0.3 ovvero poco utili nel modello (da rimuovere per evitare overfitting)
+
+Possibile collinearità: Il coefficiente di consistenze_depositi è molto piccolo ma con p-value ≈ 0.15 quindi sospetto di correlazione forte con altri regressori.
+
+Lo avevamo già visto prima nella corr matrix ma non eravamo sicuri di rimuvoere, possiamo procedere ora:
+```{r}
+dati_filtrato <- dati_filtrato %>%
+  select(-consistenze_depositi)
+```
+
+```{r}
+dati_filtrato = dati_filtrato %>%
+  na.omit() # step() con dati mancanti da errore
+mod <- lm(tassi_crescita_bp ~ . ,data = dati_filtrato)
+# selezione automatica
+step(mod)
+# seleziona modello più parsimonioso basato sul criterio di AIC minimo
+```
+### Modello finale selezionato
+
+```{r}
+mod_finale = lm(tassi_crescita_bp ~ 
+  spread_lp + 
+  tassi_crescita_lp + 
+  tassi_interesse_lp_fino1 + 
+  Tassi_crescita_depositi + 
+  anno
+, data = dati_filtrato)
+summary(mod_finale)
+```
+### Spiegazione dei risultati
+
+L'R^2 è diminuito pochissimo ma adesso il modello risulta molto semplice, e in particolare tutte le variabili risultano significative
+
+vediamo in oltre che:
+
+Errore standard dei residui = 5.99 è accettabile per la scala dei valori.
+
+F-statistic = 33.2, p-value globale < 0.000001 significa che il modello è altamente significativo.
+
+### Spiegazione dei coefficienti:
+
+spread_lp: coefficiente negativo e altamente significativo (p < 0.001), indica che un aumento dello spread a lungo termine è associato a una riduzione della crescita dei prestiti a breve. Si tratta di un segnale di inasprimento delle condizioni creditizie.
+
+tassi_crescita_lp: coefficiente positivo e significativo (p < 0.001), suggerisce un effetto di trascinamento: la crescita dei prestiti LP si accompagna a quella dei BP.
+
+tassi_interesse_lp_fino1: positivo e significativo (p < 0.01). Può indicare che tassi più elevati si verificano in fasi espansive, dove anche la domanda di prestiti BP cresce.
+
+Tassi_crescita_depositi: coefficiente negativo e significativo (p < 0.01), potrebbe riflettere un comportamento prudenziale delle banche: più raccolta → più liquidità ma meno prestiti nel breve.
+
+anno: positivo e significativo (p < 0.01), suggerisce un trend di crescita strutturale nei prestiti a breve sul lungo periodo.
+```{r}
+# Diagnostic Plot
+par(mfrow = c(2, 2))
+plot(mod_finale)
+```
+
+```{r}
+plot(mod$fitted.values, dati_filtrato$tassi_crescita_bp,
+     xlab = "Valori Predetti", ylab = "Valori Osservati",
+     main = "Predetti vs Osservati")
+abline(0, 1, col = "blue", lwd = 2)
+```
+
+```{r}
+# Q-Q plot
+qqnorm(resid(mod_finale))
+qqline(resid(mod_finale), col = "red")
+```
+qua si vede meglio
+
+```{r}
+# Test di Shapiro-Wilk
+shapiro.test(resid(mod_finale))
+```
+Residui normalmente distribuiti. Nessuna evidenza di deviazione dalla normalità. 
+
+```{r}
+# Eteroschedasticità
+
+# install.packages("lmtest")
+library(lmtest)
+
+bptest(mod_finale)  # Breusch-Pagan test
+
+```
+I residui hanno varianza costante. Modello stabile.
+ergo Nessuna eteroschedasticità significativa
+```{r}
+# RESET test (specificazione funzionale)
+library(lmtest)
+
+resettest(mod_finale)
+
+```
+Nessuna evidenza di mis-specificazione funzionale (non mancano termini quadratici o interazioni importanti)
+
+```{r}
+# Multicollinearità (VIF)
+# install.packages("car")
+library(car)
+
+vif(mod_finale)  # valori sopra 5 o 10 indicano problemi
+
+```
+VIF > 10 è un campanello d’allarme. Due variabili sono altamente collineari.
+Però essendo due variabili significative sia statisticamente che dal punto di vista economico non vale la pena rimuoverle
+
+```{r}
+# ANOVA
+mod_ridotto <- lm(tassi_crescita_bp ~ 1, data = dati_filtrato)
+anova(mod_ridotto, mod_finale)
+```
+Risultato atteso: p < 0.001 . Il modello completo è significativamente migliore del modello nullo.
+
+
+```{r}
+# install.packages("MASS")
+library(MASS)
+
+boxcox(mod_finale)
+```
+Questo errore è dovuto al fatto che la variabile dipendente (tassi_crescita_bp) contiene valori negativi (il Box-Cox richiede valori strettamente positivi)
+
+Possiamos altare il Box-Cox, dato che già il modello è buono
+```{r}
+# install.packages("strucchange")
+library(strucchange)
+
+# Split indicativo su metà serie temporale
+cut <- floor(nrow(dati_filtrato)/2)
+chow <- sctest(mod_finale, type = "Chow", point = cut)
+chow
+```
+Nessuna evidenza di instabilità strutturale(robusto nel tempo)

@@ -1,0 +1,681 @@
+---
+title: "Progetto 1"
+author: "Emanuele Iaccarino"
+date: "2025-05-15"
+output: html_document
+---
+
+```{r}
+# Dalla sezione environment -> Import Dataset -> schermata user friendly per capire i dati_Eurobarometer_2019 che abbiamo e come importarli nel mood giusto
+library(readr)
+dati_Eurobarometer_2019 <- read_csv("dati Eurobarometer 2019.csv/dati Eurobarometer 2019.csv")
+#View(dati_Eurobarometer_2019)
+```
+E' solo un warning, l'import è avvenuto correttamente
+
+# Variabile dipendente: QD16 = q1_16
+
+QD16: "Have you yourself carried out any undeclared paid activities in the last 12 months?"
+
+Risposte:
+
+- 1 = Yes
+
+- 2 = No
+
+- 3 = Refusal
+
+- 4 = Don't know
+
+```{r}
+head(dati_Eurobarometer_2019$qd16)
+table(dati_Eurobarometer_2019$qd16, useNA = "ifany")
+```
+
+```{r}
+library(tidyverse)
+# Codifica binaria corretta: 1 = sì, 0 = no (escludendo rifiuti o non sa)
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  filter(qd16 %in% c(1, 2)) %>%
+  mutate(lavoro_nero = ifelse(qd16 == 1, 1, 0))
+
+# Controllo
+table(dati_Eurobarometer_2019$lavoro_nero, useNA = "ifany")
+```
+
+# Variabili esplicative:
+
+D10: Sesso
+
+- 1 = Man,
+- 2 = Woman
+
+```{r}
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  filter(d10 %in% c(1, 2)) %>%
+  mutate(sesso = ifelse(d10 == 1, 1, 0))
+# 1 = Man, 0 = Woman
+table(dati_Eurobarometer_2019$sesso, useNA = "ifany")
+```
+
+D11: Età
+
+numerica
+
+```{r}
+table(dati_Eurobarometer_2019$d11)
+```
+
+
+D15A: Occcupazione attuale
+
+- 1 = Casalinga
+- 2 = Studente
+...
+
+```{r}
+head(dati_Eurobarometer_2019$d15a)
+```
+
+```{r}
+etichette_d15a <- c(
+  "Casalinga / Non occupato",            # 1
+  "Studente",                             # 2
+  "Disoccupato",                          # 3
+  "Pensionato / Malato",                 # 4
+  "Agricoltore",                          # 5
+  "Pescatore",                            # 6
+  "Professionista autonomo",             # 7
+  "Artigiano / Proprietario negozio",    # 8
+  "Imprenditore",                         # 9
+  "Professionista dipendente",           # 10
+  "Top management",                       # 11
+  "Middle management",                    # 12
+  "Impiegato da ufficio",                # 13
+  "Commesso / Viaggiante",               # 14
+  "Lavoro di servizio",                   # 15
+  "Supervisore",                          # 16
+  "Lavoratore manuale specializzato",    # 17
+  "Lavoratore manuale non specializzato",# 18
+  "Mai lavorato"                          # 19
+)
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  mutate(
+    occupazione = factor(d15a, levels = 1:19, labels = etichette_d15a)
+  )
+table(dati_Eurobarometer_2019$occupazione, useNA = "ifany")
+```
+Per il nostro modello creiamo una dummy per ogni occupazione
+```{r}
+dummies_occupazione <- model.matrix(~ occupazione - 1, data = dati_Eurobarometer_2019)
+```
+
+
+D8: Età fine studi
+
+numerica (occhio a valori anomali)
+Si puo' trasformare in categorica livello istruzione
+
+```{r}
+# in automatico filtra i valori anomali (i.e. 0,1,98,99)
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  mutate(
+    livello_istruzione = case_when(
+      d8 >= 10 & d8 <= 15 ~ "Bassa", # età dell'obbligo
+      d8 >= 16 & d8 <= 18 ~ "Media", # liceo
+      d8 >= 19 & d8 <= 80 ~ "Alta", # università 
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("Bassa", "Media", "Alta"))
+  )
+
+table(dati_Eurobarometer_2019$livello_istruzione, useNA = "ifany")
+```
+Perdiamo un po' di informazione ma adesso l'info è facilmente intrepretabile, come prima creiamo dummies
+
+```{r}
+dummies_istruzione <- model.matrix(~ livello_istruzione - 1, data = dati_Eurobarometer_2019)
+```
+
+Q1: Nazionalità
+
+Mapping da 1 a 30
+
+Chi ha creato il questionario ha inserito le variabili nel dataset in modo imbarazzante :(
+
+Puliamo quindi il df:
+```{r}
+# Etichette delle 30 nazionalità secondo ordine Q1
+nazionalita_labels <- c(
+  "Belgium", "Denmark", "Germany", "Greece", "Spain", "France", "Ireland", "Italy",
+  "Luxembourg", "Netherlands", "Portugal", "United Kingdom", "Austria", "Sweden",
+  "Finland", "Republic of Cyprus", "Czech Republic", "Estonia", "Hungary", "Latvia",
+  "Lithuania", "Malta", "Poland", "Slovakia", "Slovenia", "Bulgaria", "Romania",
+  "Croatia", "Other countries", "DK"
+)
+
+# Seleziona solo le colonne q1_i
+q1_matrix <- dati_Eurobarometer_2019 %>% select(starts_with("q1_")) %>% as.data.frame()
+
+# Trova la prima nazionalità selezionata per ogni individuo
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  mutate(
+    nazionalita = apply(q1_matrix, 1, function(riga) {
+      indice <- which(riga == 1)[1]  # prende il primo valore 1
+      if (is.na(indice)) {
+        return(NA)
+      } else {
+        return(nazionalita_labels[indice])
+      }
+    }) %>% factor(levels = nazionalita_labels)
+  )
+table(dati_Eurobarometer_2019$nazionalita, useNA = "ifany")
+```
+
+```{r}
+dummies_naz <- model.matrix(~ nazionalita - 1, data = dati_Eurobarometer_2019)
+```
+
+QD21: Motivazioni per il lavoro nero
+
+Mapping da 1 a 18
+
+```{r}
+motivazioni_qd21 <- c(
+  "Imposizione dal datore",                                # qd21_1
+  "Burocrazia attività regolari",                          # qd21_2
+  "Burocrazia attività occasionali",                       # qd21_3
+  "Impossibilità trovare lavoro regolare",                 # qd21_4
+  "Compenso più alto",                                     # qd21_5
+  "Beneficio reciproco",                                   # qd21_6
+  "Tasse e contributi troppo alti",                        # qd21_7
+  "Reddito secondario accettabile",                        # qd21_8
+  "Non era chiaro che andasse dichiarato",                # qd21_9
+  "Pratica comune nel settore/regione",                    # qd21_10
+  "Pratica comune tra amici/vicini",                       # qd21_11
+  "Lo Stato non fa nulla, perché pagare",                  # qd21_12
+  "Difficile vivere solo con sussidi",                     # qd21_13
+  "Perdita dei benefici se dichiarato",                   # qd21_14
+  "Nessun altro mezzo di reddito",                         # qd21_15
+  "Altro (spontaneo)",                                     # qd21_16
+  "Rifiuto (spontaneo)",                                   # qd21_17
+  "Non so (DK)"                                            # qd21_18
+)
+
+# qd21_i
+qd21_matrix <- dati_Eurobarometer_2019 %>% select(starts_with("qd21_")) %>% as.data.frame()
+
+# crea var
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  mutate(
+    motivazione_principale = apply(qd21_matrix, 1, function(riga) {
+      indice <- which(riga == 1)[1]  # trova il primo valore "1"
+      if (is.na(indice)) {
+        return(NA)
+      } else {
+        return(motivazioni_qd21[indice])
+      }
+    }) %>% factor(levels = motivazioni_qd21)
+  )
+```
+
+```{r}
+table(dati_Eurobarometer_2019$motivazione_principale, useNA = "always")
+```
+Dato il gran numero di dati_Eurobarometer_2019 mancanti rimuoviamo la variabile dal modello
+
+QD4: Fiducia in autorità 
+
+Ordinale da 1 a 4
+
+```{r}
+table(dati_Eurobarometer_2019$qd4_1, useNA = "always")
+```
+essendo ordinale la possiamo lasciare cosi, non c'è nemmeno bisogno di applicare un encoder per trasformarla in categorica sennò perde la proprietà dell'essere ordinale
+
+QD10: Esperienza diretta di pagamenti in nero
+
+- 1 = Yes
+
+- 2 = No
+
+- 3 = Refusal
+
+- 4 = Don't know
+
+```{r}
+table(dati_Eurobarometer_2019$qd10, useNA = "always")
+```
+.i li interpreto come dati_Eurobarometer_2019 mancanti, anche se non è specificato sul PDF della survey
+In base a ciò la variabile non è utilizzabile per il modello
+
+QD11: Tipo di remunerazione non dichiarata
+
+- 1	Parte della retribuzione regolare
+
+- 2	Straordinari / bonus (extra work)
+
+- 3	Entrambe
+
+- 4–5	Rifiuto / Non so → escludere
+
+```{r}
+table(dati_Eurobarometer_2019$qd11)
+```
+Sono quasi tutte Nans quindi rimuoviamo anche questa variabile
+
+QD12 : Percentuale di reddito percepito in nero
+
+Numerica, ma contiene 997,998,999 da rimuovere
+
+```{r}
+table(dati_Eurobarometer_2019$qd12, useNA = "always")
+```
+possiamo rimuovere anche questa
+
+QD13: Disponibilità a ricevere pagamenti non dichiarati
+
+Ordinale (Considera da 3 a 1 in quest'ordine), 4 e 5 vanno rimossi
+
+```{r}
+table(dati_Eurobarometer_2019$qd13, useNA = "always")
+```
+Si puo' valutare la rimozione anche di questa
+
+QD14: Rifiuto di pagamenti in nero
+
+- 1 YES
+
+-2 NO
+
+```{r}
+table(dati_Eurobarometer_2019$qd14, useNA = "always")
+```
+stessa cosa
+
+QD15: Dimensione dell’azienda
+
+Ordinale da 1 a 7, rimuovi 8 e 9
+
+```{r}
+table(dati_Eurobarometer_2019$qd15, useNA = "always")
+```
+a malincuore anche di questa
+
+Qc5: quanto il rispondente ritiene accettabile il lavoro non dichiarato in 5 diverse situazioni
+
+- q5_1	Impresa assume e paga una parte del salario non dichiarata
+
+- q5_2	Azienda esterna assume e non dichiara il lavoratore
+
+- q5_3	Privato assume per lavoro domestico e non dichiara
+
+- q5_4	Impresa assume un privato per lavoro domestico e non dichiara
+
+- q5_5	Lavoratore autonomo che non dichiara parte o tutto il proprio reddito
+
+```{r}
+# 1. Sostituisci 11 e 12 con NA
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  mutate(across(starts_with("qc5_"), ~ na_if(., 11))) %>%
+  mutate(across(starts_with("qc5_"), ~ na_if(., 12)))
+
+# Media percepita di accettabilità
+dati_Eurobarometer_2019 <- dati_Eurobarometer_2019 %>%
+  rowwise() %>%
+  mutate(accettabilita_media = mean(c_across(qc5_1:qc5_5), na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+```{r}
+summary(dati_Eurobarometer_2019$accettabilita_media)
+```
+
+
+```{r}
+# install.packages("fastDummies")
+#library(fastDummies)
+
+dati_model <- dati_Eurobarometer_2019 %>%
+  dummy_cols(select_columns = c("occupazione", "livello_istruzione", "nazionalita"), 
+             remove_selected_columns = TRUE)
+
+```
+
+```{r}
+dati_model <- dati_model %>%
+  select(
+    lavoro_nero,
+    sesso = d10,
+    eta = d11,
+    Fiducia_autorita = qd4_1,
+    accettabilita_media,
+    starts_with("occupazione_"),
+    starts_with("livello_istruzione_"),
+    starts_with("nazionalita_")
+  )
+```
+
+```{r}
+#names(dati_model)
+```
+# Data Engineering
+
+```{r}
+dati_model <- dati_model %>%
+  mutate(
+    pagato_nero_yes = ifelse(is.na(lavoro_nero), NA,
+                             ifelse(lavoro_nero == 1, 1, 0))  )
+
+dati_model <- dati_model %>%
+  select(-lavoro_nero, -livello_istruzione_Bassa)
+```
+
+```{r}
+# Definizione dei gruppi di lavoro
+white_collar <- c("occupazione_Impiegato da ufficio", "occupazione_Middle management",
+                  "occupazione_Top management", "occupazione_Professionista dipendente",
+                  "occupazione_Professionista autonomo", "occupazione_Supervisore")
+
+blue_collar <- c("occupazione_Agricoltore", "occupazione_Pescatore",
+                 "occupazione_Artigiano / Proprietario negozio", "occupazione_Imprenditore",
+                 "occupazione_Commesso / Viaggiante", "occupazione_Lavoro di servizio",
+                 "occupazione_Lavoratore manuale specializzato", "occupazione_Lavoratore manuale non specializzato")
+
+# Non attivi: le manteniamo esplicitamente
+non_attivi <- c("occupazione_Casalinga / Non occupato", "occupazione_Studente",
+                "occupazione_Disoccupato", "occupazione_Pensionato / Malato", "occupazione_Mai lavorato")
+
+# Creazione macro-occupazione solo per i lavoratori attivi
+dati_model <- dati_model %>%
+  mutate(
+    macro_occupazione = case_when(
+      rowSums(select(., all_of(white_collar))) > 0 ~ "white_collar",
+      rowSums(select(., all_of(blue_collar))) > 0 ~ "blue_collar",
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("blue_collar","white_collar"))
+  ) %>%
+  fastDummies::dummy_cols("macro_occupazione", remove_first_dummy = FALSE) %>%
+  select(-all_of(c(white_collar, blue_collar))) # rimuovi solo i dummy attivi
+
+```
+
+```{r}
+# Sistemazione delle dummies macro_occupazione
+dati_model <- dati_model %>%
+  mutate(
+    macro_occupazione_blue_collar = replace_na(macro_occupazione_blue_collar, 0),
+    macro_occupazione_white_collar = replace_na(macro_occupazione_white_collar, 0)
+  ) %>%
+  select(-macro_occupazione_NA)
+# corregge i bug di Fastdummies, ovvero creare impropriamente una var_NA, e sostituire valori mancanti(perchè disponibili in altra dummy) da NA a 0
+```
+
+```{r}
+dati_model <- dati_model %>%
+  select(-`occupazione_Casalinga / Non occupato`)
+# rimuovo dummy da attivi per evitare dummy trap
+```
+
+
+```{r}
+# Raggruppamento macro_nazionalita
+eu15 <- c("Austria", "Belgium", "Denmark", "Finland", "France", "Germany", "Greece",
+          "Ireland", "Italy", "Luxembourg", "Netherlands", "Portugal", "Spain", 
+          "Sweden", "United Kingdom")
+
+eu13 <- c("Bulgaria", "Croatia", "Czech Republic", "Estonia", "Hungary", "Latvia", 
+          "Lithuania", "Malta", "Poland", "Romania", "Slovakia", "Slovenia", "Republic of Cyprus")
+
+# Ricava la nazionalità a partire dalle dummies
+naz_dummies <- grep("^nazionalita_", names(dati_model), value = TRUE)
+naz_labels <- gsub("nazionalita_", "", naz_dummies)
+
+dati_model <- dati_model %>%
+  mutate(
+    nazionalita = naz_labels[max.col(select(., all_of(naz_dummies)), ties.method = "first")],
+    macro_nazionalita = case_when(
+      nazionalita %in% eu15 ~ "eu15",
+      nazionalita %in% eu13 ~ "eu13",
+      TRUE ~ "altro"
+    ) %>% factor(levels = c("eu15", "eu13", "altro"))
+  ) %>%
+  fastDummies::dummy_cols("macro_nazionalita", remove_first_dummy = TRUE) %>%
+  select(-all_of(naz_dummies), -nazionalita, -macro_nazionalita_altro)
+
+```
+
+```{r}
+dati_model <- dati_model %>%
+  mutate(
+    livello_istruzione_Media = replace_na(livello_istruzione_Media, 0),
+    livello_istruzione_Alta = replace_na(livello_istruzione_Alta, 0)
+  )
+# se i valori sono NA vanno assegnati alla rispettiva classe
+```
+
+```{r}
+glimpse(dati_model)
+```
+```{r}
+table(dati_model$`occupazione_Mai lavorato`)
+# questa var ha solo zeri, oltre che essere inutile causa problemi di multicollinerità del modello successivo
+```
+```{r}
+# Rimuovi le variabili non più necessarie
+dati_model <- dati_model %>%
+  select(-macro_nazionalita, -macro_occupazione, -`occupazione_Mai lavorato`)
+# rimuoviamo anche le baseline per occupazione e nazionalità
+```
+
+```{r}
+#glimpse(dati_model)
+```
+
+# Modelling 
+```{r}
+# Modello logit finale: predizione di chi ha pagato in nero (vs no)
+modello_logit_finale <- glm(
+  pagato_nero_yes ~ . ,
+  data = dati_model,
+  family = binomial()
+)
+
+summary(modello_logit_finale)
+
+```
+
+### Interpretazione delle covariate
+
+
+L’output del modello fornisce coefficienti log-odds. Per interpretarli più facilmente, li convertiamo in Odds Ratio (OR).
+
+- exp() perché i coefficienti di un modello logit sono in scala log-odds. L'esponenziale restituisce la variazione nelle odds associata a un'unità di aumento della variabile indipendente.
+
+
+```{r}
+# Odds Ratio
+exp_coef <- exp(coef(modello_logit_finale))
+confint_mod <- confint(modello_logit_finale)
+exp_confint <- exp(confint_mod)
+
+odds_table <- data.frame(
+  Variabile = names(exp_coef),
+  Odds_Ratio = round(exp_coef, 3),
+  CI_Lower = round(exp_confint[,1], 3),
+  CI_Upper = round(exp_confint[,2], 3)
+)
+
+```
+
+```{r}
+#View(odds_table)
+```
+
+Variabile e Interpretazione pratica                                                                                                                     
+ - **sesso** = 0.583  Le donne hanno il **41.7% in meno** di probabilità di pagare in nero rispetto agli uomini (valore di riferimento).                              
+ - **eta** = 0.979 Ogni anno in più di età **riduce** la probabilità di pagare in nero del **2.1%**.                                                               
+ - **Fiducia\_autorita** = 1.172 Una maggiore fiducia nelle autorità è associata a **più probabilità** di pagare in nero (*forse controintuitivo, alcune persone giustificano il nero pur avendo fiducia nelle istituzioni, ipotesi anche di non linearità o che la fiducia sia correlata ad altri fattor*). 
+
+ - **occupazione\_Disoccupato** = 2.884 I disoccupati hanno **quasi il triplo** di probabilità di aver pagato in nero rispetto ai casalinghi/non occupati (riferimento).                
+ - **macro\_occupazione\_blue\_collar** = 1.395 I lavoratori manuali hanno circa il **40% in più** di probabilità di pagare in nero rispetto ai non attivi.                                     
+ - **macro\_nazionalita\_eu13** = 0.778 I cittadini EU13 hanno una probabilità **22% più bassa** rispetto agli EU15.                                                                    
+ - **livello\_istruzione\_NA** = 1.774 Gli individui con istruzione mancante (NA) mostrano **probabilità molto più alte**: potrebbe indicare un effetto selezione o problemi nei dati. 
+
+```{r}
+library(broom)
+library(ggplot2)
+library(dplyr)
+
+# Forest plot
+or_data <- tidy(modello_logit_finale, conf.int = TRUE, exponentiate = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(term = gsub("`", "", term))  # rimuove eventuali apici nei nomi
+
+# Ordina per effetto stimato
+or_data <- or_data %>%
+  arrange(estimate) %>%
+  mutate(term = factor(term, levels = term))
+
+# Plot
+ggplot(or_data, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(
+    title = "Forest Plot degli Odds Ratio",
+    x = "Odds Ratio (con CI 95%)",
+    y = "Variabile"
+  ) +
+  theme_minimal()
+```
+
+### Risultati
+
+```{r}
+prob_pred <- predict(modello_logit_finale, type = "response")
+pred_class <- ifelse(prob_pred > 0.5, 1, 0)
+
+# Confusion matrix
+table(Predicted = pred_class, Actual = dati_model$pagato_nero_yes)
+```
+Abbiamo un grande problema. La nostra variabile target è sbilanciata
+
+```{r}
+table(dati_model$pagato_nero_yes)
+```
+La classe sbilanciata contiene solo
+
+```{r}
+961 / (27000) * 100
+```
+% delle osservazioni per cui il nostro modello maximiza la performance (accuracy) semplicemente dando per scontato che tutte siano 0 (contro il pagamento in nero). In realtà il modello Logit calcola la probabilità che una determinata osservazione sia in una determinata classe o meno, per cui possiamo semplicemente cambiare la soglia di scelta (dal classico 0.5) e prenderne una piu' bassa che classifichi le osservazioni che sicuramente sembrano 0 come 0 ma quelle che hanno un minimo possibilità di sembrare 1 le proviamo a classificare come 1.
+
+Cambiare il cutoff è uno dei metodi piu' semplici e intuitivi per rispondere al problema delle classi sbilanciate, in questo caso è necessario utilizzare questo metodo perchè dobbiamo utilizzare il Logit e non metodi ad albero che permettono l'utilizzo di tecniche piu' complesse
+
+```{r}
+library(pROC)
+
+prob_pred <- predict(modello_logit_finale, type = "response")
+roc_curve <- roc(dati_model$pagato_nero_yes, prob_pred)
+auc(roc_curve)
+plot(roc_curve, main = paste0("ROC Curve - AUC = ", round(auc(roc_curve), 3)))
+abline(a = 0, b = 1, lty = 2, col = "gray")
+```
+
+Il modello ha una buona capacità discriminante.
+
+AUC = 0.71 → accettabile, indica che il modello distingue correttamente i casi in circa il 71% delle volte.
+
+Curva sopra la diagonale → il modello è sicuramente meglio del caso.
+
+Cutoff 
+```{r}
+# Ottimizza cutoff con criterio di Youden
+best_cutoff <- coords(roc_curve, "best", ret = "threshold", best.method = "youden")
+best_cutoff
+```
+La soglia è molto bassa, vediamo come si comporta sul modello
+
+```{r}
+soglia = best_cutoff[[1]]
+pred_class <- ifelse(fitted(modello_logit_finale) > soglia, 1, 0)
+confusionMatrix(factor(pred_class), factor(dati_model$pagato_nero_yes))
+```
+
+
+L'accuracy scende ma in un dataset sbilanciato come questo non è la metrica da tenere in considerazione, invece vediamo ora un giusto trade off tra specificity e sensitivity.
+Inoltre cosa piu' importante adesso il nostro modello "tenta" di prevedere se un lavoratore ha lavorato in nero, rispetto al modello precedente che per semplicità dava per scontato che tutti fossero in regola
+
+## Penalized Logistic Regression
+
+```{r}
+library(glmnet)
+x <- model.matrix(pagato_nero_yes ~ . , data = dati_model)[, -1]
+y <- dati_model$pagato_nero_yes
+mod_pen <- glmnet(x, y, family = "binomial", alpha = 0)
+
+# cross-validated
+cv_mod <- cv.glmnet(x, y, family = "binomial", alpha = 0)
+plot(cv_mod)
+
+```
+modello con penalizzazione L2 (Ridge):
+
+- Asse X: log(\delta), dove \delta è il parametro di penalizzazione
+Verso sinistra: maggiore penalizzazione → modelli più semplici, verso destra il contrario
+
+- Asse Y: Binomial Deviance, Misura di errore: più è bassa, meglio il modello predice.
+I puntini rossi sono la devianza media a ogni valore di \delta
+Le barre grigie sono gli errori standard della devianza.
+
+Le due linee trattegiate indicano:
+
+- Il valore di \delta che minimizza la devianza (quella a sx). È il miglior compromesso per massima accuratezza.
+
+- Il valore di \delta più parsimonioso (cioè più semplice) entro 1 errore standard dalla devianza minima (quello a dx).
+```{r}
+# prendiamo il modello piu' preciso (quello a sx)
+mod_ridge_final <- glmnet(x, y, alpha = 0, lambda = cv_mod$lambda.min)
+```
+
+```{r}
+coef(mod_ridge_final)
+```
+coefficienti shrinkati: quelli meno rilevanti tendono verso zero, ma mai esattamente a zero (tipico del Ridge).
+
+```{r}
+pred_prob <- predict(mod_ridge_final, newx = x, type = "response")
+
+library(pROC)
+roc_ridge <- roc(y, pred_prob)
+soglia_ridge <- coords(roc_ridge, "best", ret = "threshold")[[1]]
+
+pred_class <- ifelse(pred_prob > soglia_ridge, 1, 0)
+
+confusionMatrix(factor(pred_class), factor(y))
+```
+
+```{r}
+library(pROC)
+pred_prob <- predict(mod_ridge_final, newx = x, type = "response")
+roc_ridge <- roc(y, pred_prob)
+auc(roc_ridge)
+```
+
+Dati i risultati, il Logit semplice con dati puliti e soglia tunato ha valori leggermenti migliori ed è piu' facile da interpretare, quindi useremo quello
+
+
+
+### Test di Goodness-of-Fit
+
+Hosmer-Lemeshow test:
+```{r}
+# install.packages("ResourceSelection")
+library(ResourceSelection)
+hoslem.test(dati_model$pagato_nero_yes, fitted(modello_logit_finale))
+```
+Con p = 0.9565, non abbiamo motivo di rifiutare l'ipotesi che il modello si adatti correttamente.
+
+
+

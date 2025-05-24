@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Ignora tutti i file PDF
+*.pdf
+
+# Ignora il file Excel di Belgio
+Dati_Belgio.*
+
+# Ignora la cartella compressa Eurobarometer
+dati Eurobarometer 2019.csv.zip
