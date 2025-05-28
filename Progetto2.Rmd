@@ -120,9 +120,47 @@ ggplot(dati, aes(x = t, y = tassi_crescita_bp)) +
 trimestre = dati$t # lo salviamo per sicurezza
 # ma lo rimuoviamo perchè è utile solo al plotting
 dati <- dati %>%
-  select(-t)
+  dplyr::select(-t)
 ```
 
+```{r}
+# install.packages("MASS")
+library(MASS)
+#mod_iniziale <- lm(dati$tassi_crescita_bp ~ ., data = dati)
+#boxcox(mod_iniziale) ho commentato perchè da errore cosi non blocca il running
+```
+Questo errore è dovuto al fatto che la variabile dipendente (tassi_crescita_bp) contiene valori negativi (il Box-Cox richiede valori strettamente positivi)
+
+Questo però non mette in dubbio la validità della variabile target scelta
+mod_shifted
+```{r}
+# Rimuovi colonne factor con un solo livello
+dati_clean <- dati[, !sapply(dati, function(x) is.factor(x) && nlevels(x) < 2)]
+
+# Trasforma fattori binari in numerici
+dati_clean <- data.frame(lapply(dati_clean, function(x) {
+  if (is.factor(x) && nlevels(x) == 2) as.numeric(x) else x
+}))
+
+dati_clean <- dati_clean %>% filter(!is.na(tassi_crescita_bp))
+
+# Crea y_shifted positiva
+min_y <- min(dati_clean$tassi_crescita_bp)
+dati_clean$y_shifted <- dati_clean$tassi_crescita_bp - min_y + 1
+
+# Stima modello solo con righe complete
+dati_model <- dati_clean %>%
+  dplyr::select(-tassi_crescita_bp) %>%
+  dplyr::select(where(~ all(!is.na(.)) & length(unique(.)) > 1))
+
+mod_shifted <- lm(y_shifted ~ ., data = dati_model)
+boxcox(mod_shifted)
+```
+
+Non è necessario trasformare la variabile dipendente:
+
+Il valore ottimale di \lambda si trova molto vicino a 1.
+Box-Cox conferma che il modello con la risposta non trasformata è adeguato, almeno rispetto all’assunzione di normalità e varianza costante
 ## Scelta delle features
 
 ```{r}
@@ -434,6 +472,22 @@ bptest(mod_finale)  # Breusch-Pagan test
 ```
 I residui hanno varianza costante. Modello stabile.
 ergo Nessuna eteroschedasticità significativa
+
+```{r}
+# install.packages("tseries")
+library(tseries)
+
+jarque.bera.test(resid(mod_finale))
+
+```
+non rileva deviazioni significative da normalità (in termini di simmetria e curtosi).
+
+```{r}
+# Test KS (Kolmogorov-Smirnov) sulla normalità dei residui
+ks.test(resid(mod_finale), "pnorm", mean = mean(resid(mod_finale)), sd = sd(resid(mod_finale)))
+
+```
+Non c’è evidenza contro la normalità. I residui sono compatibili con una distribuzione normale
 ```{r}
 # RESET test (specificazione funzionale)
 library(lmtest)
@@ -463,15 +517,6 @@ Risultato atteso: p < 0.001 . Il modello completo è significativamente migliore
 
 
 ```{r}
-# install.packages("MASS")
-library(MASS)
-
-boxcox(mod_finale)
-```
-Questo errore è dovuto al fatto che la variabile dipendente (tassi_crescita_bp) contiene valori negativi (il Box-Cox richiede valori strettamente positivi)
-
-Possiamos altare il Box-Cox, dato che già il modello è buono
-```{r}
 # install.packages("strucchange")
 library(strucchange)
 
@@ -481,3 +526,66 @@ chow <- sctest(mod_finale, type = "Chow", point = cut)
 chow
 ```
 Nessuna evidenza di instabilità strutturale(robusto nel tempo)
+
+Lascio questo test per ultimo perchè essendo significativo dobbiamo valutare se rimuovere o meno il modello, ma non lo faremo perchè è un test di autocorrelazione dei residui, e non di stabilità del modello
+
+```{r}
+# Durbin-Watson Test
+dwtest(mod_finale)
+```
+C’è forte evidenza di autocorrelazione positiva nei residui
+
+```{r}
+acf(resid(mod_finale))
+
+```
+Il primo lag (lag 1) mostra una autocorrelazione molto elevata (≈ 0.9), e significativamente diversa da zero (oltre le linee blu).
+
+Anche i lag 2 e 3 sono positivi e superano o sfiorano i limiti di significatività.
+
+I residui sono autocorrelati positivamente, specialmente con autocorrelazione di ordine 1 (AR(1)).
+
+```{r}
+dati_filtrato$t <- as.character(dati_filtrato$t)
+anno <- as.numeric(sub("^(\\d{4})\\sQ[1-4]$", "\\1", dati_filtrato$t))
+trimestre <- as.numeric(sub("^\\d{4}\\sQ([1-4])$", "\\1", dati_filtrato$t))
+dati_filtrato$tempo <- anno + (trimestre - 1) / 4
+```
+In riassunto:
+Il grafico ACF e il test di Durbin–Watson evidenziano una forte autocorrelazione positiva nei residui del modello OLS.
+Per correggere questa violazione dell’ipotesi di indipendenza, abbiamo stimato un modello GLS con errore AR(1), che tiene conto della dipendenza seriale nei dati.
+I coefficienti stimati risultano simili a quelli del modello OLS, ma ora gli errori standard sono corretti per autocorrelazione, rendendo le inferenze più affidabili.
+
+```{r}
+# install.packages("nlme")
+library(nlme)
+
+mod_gls <- gls(
+  tassi_crescita_bp ~ spread_lp + tassi_crescita_lp + tassi_interesse_lp_fino1 +
+    Tassi_crescita_depositi, # La variabile anno è stata rimossa dal modello GLS per evitare collinearità con la variabile tempo
+  correlation = corAR1(form = ~ tempo),
+  data = dati_filtrato
+)
+
+summary(mod_gls)
+```
+Il parametro AR(1) stimato è elevato (0.964), confermando la presenza di forte dipendenza seriale.
+
+tassi_crescita_lp ha effetto positivo e significativo: la crescita dei prestiti a lungo termine è associata a un aumento della crescita dei prestiti a breve.
+
+Tassi_crescita_depositi ha effetto negativo e significativo: quando crescono i depositi, i prestiti a breve termine tendono a rallentare.
+
+spread_lp è quasi significativo (p = 0.096): possibile effetto negativo del costo del credito a lungo termine.
+
+tassi_interesse_lp_fino1 e l'intercetta non sono significativi.
+
+AIC = 314.17
+
+BIC = 326.97
+
+Log-Likelihood = –150.08
+
+Residual Standard Error = 5.49
+
+Le inferenze sono ora corrette per autocorrelazione, e i coefficienti sono quindi più affidabili rispetto al modello OLS.
+
