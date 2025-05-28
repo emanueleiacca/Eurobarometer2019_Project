@@ -15,7 +15,7 @@ library(dplyr)
 library(ggplot2)
 library(tsibble)     # Per gestire le serie temporali
 library(lubridate)   # Per gestire le date
-
+library(corrplot)
 # Carica il file
 dati <- read_csv("Dati_Belgio.csv")
 #View(dati)
@@ -35,7 +35,7 @@ summary(dati)
 library(dplyr)
 # variabili inutili
 dati <- dati %>%
-  select(-`...1`, -country, -quat, -id)
+  dplyr::select(-`...1`, -country, -quat, -id)
 ```
 
 
@@ -55,7 +55,7 @@ dati <- dati %>%
     quarter = as.integer(cycle(t))
   )
 
-head(dati %>% select(t, anno, quarter))
+head(dati %>% dplyr::select(t, anno, quarter))
 ```
 Si trova quindi possiamo continuare con l'analisi
 
@@ -179,14 +179,14 @@ tassi_interesse_bp_tot anche questa insieme allo spread può causare problemi
 
 ```{r}
 vars <- c("Spread_bp", "Spread_bp_fino1", "Spread_bp_oltre1", "costo_credito", "tassi_interesse_bp_tot")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
 ```{r}
 # rimuovere tassi_interesse_bp_tot è infatti importante per non confondere il modello
 dati <- dati %>%
-  select(-tassi_interesse_bp_tot)
+  dplyr::select(-tassi_interesse_bp_tot)
 ```
 
 ```{r}
@@ -197,7 +197,7 @@ table(dati$Spread_bp_oltre1, useNA = "always")
 
 ```{r}
 vars <- c("Spread_bp", "Spread_bp_fino1", "costo_credito")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
@@ -205,7 +205,7 @@ la variabile rimossa ha avuto un effetto indesiderato sulla variabile rimasta, r
 
 ```{r}
 dati <- dati %>%
-  select(-Spread_bp_fino1, -Spread_bp_oltre1 )
+  dplyr::select(-Spread_bp_fino1, -Spread_bp_oltre1 )
 ```
 
 
@@ -217,7 +217,7 @@ t_depositi_overnight poco rilevante
 
 ```{r}
 vars <- c("tassi_euribor", "t_operazioni_rifin_marg", "t_interesse_operazioni_rif_prin", "t_depositi_overnight")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
@@ -225,7 +225,7 @@ corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 Tutte altamente correlate come spiegato prima teoricamente, rimuoviamole e lasciamo solo tassi_euribor 
 ```{r}
 dati <- dati %>%
-  select(-t_operazioni_rifin_marg, -t_interesse_operazioni_rif_prin, -t_depositi_overnight)
+  dplyr::select(-t_operazioni_rifin_marg, -t_interesse_operazioni_rif_prin, -t_depositi_overnight)
 
 ```
 
@@ -237,7 +237,7 @@ titoli_debiti non direttamente connesso alla crescita prestiti
 
 ```{r}
 vars <- c("ratio_prestiti_depositi", "consistenze_depositi", "titoli_debiti")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
@@ -257,7 +257,7 @@ Tassi_crescita_depositi può confondere
 
 ```{r}
 vars <- c("GDP", "Tassi_crescita_depositi")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
@@ -270,19 +270,19 @@ names(dati)
 Mancano ancora alcune da pulire
 ```{r}
 vars <- c("spread_lp", "spread_lp_fino1", "spread_lp_oltre1")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 ```
 ```{r}
 dati <- dati %>%
-  select(-spread_lp_fino1, -spread_lp_oltre1)
+  dplyr::select(-spread_lp_fino1, -spread_lp_oltre1)
 # nel dubbio leviamo
 ```
 
 ```{r}
 vars <- c("spread_lp", "Spread_bp")
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.cex = 0.7)
 # qui invece meglio rimanere, male che vada sarà il modello a identificare un ipotetico problema
@@ -294,8 +294,11 @@ names(dati)
 
 Finora abbaimo diviso le variabili in macrotematiche, adesso guardiamole nell'insieme per valutare anche come l'interazione tra diverse variabili possa influenzare il nostro modello 
 ```{r}
+dati <- dati %>%
+  dplyr::select(-t)
 vars = names(dati)
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+
+dati_corr <- dati %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.srt = 45,number.cex = 0.5,tl.cex = 0.8, 
 )
@@ -311,7 +314,7 @@ cor_df_unique <- cor_df %>%
   rowwise() %>%
   mutate(pair = paste(sort(c(Var1, Var2)), collapse = "_")) %>%
   distinct(pair, .keep_all = TRUE) %>%
-  select(Var1, Var2, Corr = Freq)
+  dplyr::select(Var1, Var2, Corr = Freq)
 
 print(cor_df_unique)
 ```
@@ -340,7 +343,7 @@ names(dati_filtrato)
 ```
 ```{r}
 vars = names(dati_filtrato)
-dati_corr <- dati_filtrato %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati_filtrato %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 
 cor_df <- as.data.frame(as.table(cor_matrix)) %>%
@@ -353,19 +356,19 @@ cor_df_unique <- cor_df %>%
   rowwise() %>%
   mutate(pair = paste(sort(c(Var1, Var2)), collapse = "_")) %>%
   distinct(pair, .keep_all = TRUE) %>%
-  select(Var1, Var2, Corr = Freq)
+  dplyr::select(Var1, Var2, Corr = Freq)
 
 print(cor_df_unique)
 ```
 
 ```{r}
 dati_filtrato <- dati_filtrato %>%
-  select(-tassi_interesse_bp_fino1)
+  dplyr::select(-tassi_interesse_bp_fino1)
 ```
 
 ```{r}
 vars = names(dati_filtrato)
-dati_corr <- dati %>% select(all_of(vars)) %>% na.omit()
+dati_corr <- dati_filtrato %>% dplyr::select(all_of(vars)) %>% na.omit()
 cor_matrix <- cor(dati_corr)
 corrplot(cor_matrix, method = "number", tl.srt = 45,number.cex = 0.5,tl.cex = 0.8, 
 )
@@ -391,7 +394,7 @@ Possibile collinearità: Il coefficiente di consistenze_depositi è molto piccol
 Lo avevamo già visto prima nella corr matrix ma non eravamo sicuri di rimuvoere, possiamo procedere ora:
 ```{r}
 dati_filtrato <- dati_filtrato %>%
-  select(-consistenze_depositi)
+  dplyr::select(-consistenze_depositi)
 ```
 
 ```{r}
@@ -546,7 +549,10 @@ Anche i lag 2 e 3 sono positivi e superano o sfiorano i limiti di significativit
 I residui sono autocorrelati positivamente, specialmente con autocorrelazione di ordine 1 (AR(1)).
 
 ```{r}
-dati_filtrato$t <- as.character(dati_filtrato$t)
+```
+
+```{r}
+dati_filtrato$t <- paste(dati_filtrato$anno, paste0("Q", dati_filtrato$quarter), sep = " ")
 anno <- as.numeric(sub("^(\\d{4})\\sQ[1-4]$", "\\1", dati_filtrato$t))
 trimestre <- as.numeric(sub("^\\d{4}\\sQ([1-4])$", "\\1", dati_filtrato$t))
 dati_filtrato$tempo <- anno + (trimestre - 1) / 4
