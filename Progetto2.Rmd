@@ -547,9 +547,6 @@ Anche i lag 2 e 3 sono positivi e superano o sfiorano i limiti di significativit
 I residui sono autocorrelati positivamente, specialmente con autocorrelazione di ordine 1 (AR(1)).
 
 ```{r}
-```
-
-```{r}
 dati_filtrato$t <- paste(dati_filtrato$anno, paste0("Q", dati_filtrato$quarter), sep = " ")
 anno <- as.numeric(sub("^(\\d{4})\\sQ[1-4]$", "\\1", dati_filtrato$t))
 trimestre <- as.numeric(sub("^\\d{4}\\sQ([1-4])$", "\\1", dati_filtrato$t))
